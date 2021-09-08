@@ -2,7 +2,7 @@ use super::util::finalizer::OrderedFinalizer;
 use crate::{
     codecs::{self, DecodingConfig},
     config::{log_schema, DataType, SourceConfig, SourceContext, SourceDescription},
-    event::{BatchNotifier, Event, Value},
+    event::{BatchNotifier, Event, EventFinalizer, Value},
     internal_events::{KafkaEventFailed, KafkaEventReceived, KafkaOffsetUpdateFailed},
     kafka::{KafkaAuthConfig, KafkaStatisticsContext},
     shutdown::ShutdownSignal,
@@ -204,9 +204,19 @@ async fn kafka_source(
 
                 let mut events = Vec::new();
 
+                // This is a bit messy, but gives us `batch` and `receiver` as separate `Option`s
+                let (batch, receiver) = finalizer
+                    .as_ref()
+                    .map(|_| BatchNotifier::new_with_receiver())
+                    .map(|(batch, receiver)| (Some(batch), Some(receiver)))
+                    .unwrap_or((None, None));
+
                 while let Ok(Some((next, _))) = decoder.decode_eof(&mut payload) {
                     for mut event in next {
                         if let Event::Log(ref mut log) = event {
+                            if let Some(batch) = &batch {
+                                log.add_finalizer(EventFinalizer::new(Arc::clone(batch)));
+                            }
                             log.insert(log_schema().source_type_key(), Bytes::from("kafka"));
                             log.insert(log_schema().timestamp_key(), timestamp);
                             log.insert(&key_field, msg_key.clone());
@@ -220,23 +230,11 @@ async fn kafka_source(
                     }
                 }
 
-                match &mut finalizer {
-                    Some(finalizer) => {
-                        let (batch, receiver) = BatchNotifier::new_with_receiver();
-                        let mut events = stream::iter(
-                            events
-                                .into_iter()
-                                .map(|event: Event| event.with_batch_notifier(&batch)),
-                        )
-                        .map(Ok);
-                        match out.send_all(&mut events).await {
-                            Err(error) => error!(message = "Error sending to sink.", %error),
-                            Ok(_) => finalizer.add(msg.into(), receiver),
-                        }
-                    }
-                    None => match out.send_all(&mut stream::iter(events).map(Ok)).await {
-                        Err(error) => error!(message = "Error sending to sink.", %error),
-                        Ok(_) => {
+                match out.send_all(&mut stream::iter(events).map(Ok)).await {
+                    Err(error) => error!(message = "Error sending to sink.", %error),
+                    Ok(_) => match &mut finalizer {
+                        Some(finalizer) => finalizer.add(msg.into(), receiver.unwrap()),
+                        None => {
                             if let Err(error) = consumer.store_offset(&msg) {
                                 emit!(KafkaOffsetUpdateFailed { error });
                             }
