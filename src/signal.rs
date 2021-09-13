@@ -108,6 +108,18 @@ impl SignalHandler {
             let _ = shutdown_tx.send(());
         }
     }
+
+    /// Terminate the app silently when the appropriate signal is received.
+    pub fn quit_on_signal(mut signal_rx: SignalRx) {
+        tokio::spawn(async move {
+            while let Some(signal) = signal_rx.recv().await {
+                match signal {
+                    SignalTo::Quit | SignalTo::Shutdown => std::process::exit(0),
+                    _ => continue,
+                }
+            }
+        });
+    }
 }
 
 /// Signals from OS/user.

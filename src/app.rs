@@ -114,6 +114,9 @@ impl Application {
                 signal_handler.forever(signal::os_signals());
 
                 if let Some(s) = sub_command {
+                    // Handle quit/shutdown signals to exit from sub-commands.
+                    signal::SignalHandler::quit_on_signal(signal_rx);
+
                     let code = match s {
                         SubCommand::Generate(g) => generate::cmd(&g),
                         SubCommand::Graph(g) => graph::cmd(&g),
