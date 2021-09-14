@@ -1,0 +1,49 @@
+#@follow_tag(registry.redhat.io/ubi8:latest)
+FROM registry.redhat.io/ubi8:8.4-209 AS builder
+
+RUN INSTALL_PKGS=" \
+      rust-toolset \
+      cmake \
+      make \
+      git \
+      openssl-devel \
+      llvm-toolset \
+      cyrus-sasl \
+      python36 \
+      llvm \
+      cyrus-sasl-devel \
+      libtool \
+      " && \
+    yum install -y $INSTALL_PKGS && \
+    rpm -V $INSTALL_PKGS && \
+    yum clean all
+
+RUN mkdir -p /src
+
+WORKDIR /src
+COPY . /src
+
+RUN make build
+
+
+#@follow_tag(registry.redhat.io/ubi8:latest)
+FROM registry.redhat.io/ubi8:8.4-209
+
+COPY --from=builder /src/target/release/vector /usr/bin
+WORKDIR /usr/bin
+CMD ["/usr/bin/vector"]
+
+LABEL \
+        io.k8s.display-name="Logging Vector" \
+        io.k8s.description="Logging Vectror is a container for collecting various container logs" \
+        io.openshift.tags="openshift,logging,vector" \
+        com.redhat.delivery.appregistry="false" \  
+        maintainer="AOS Logging <aos-logging@redhat.com>" \
+        License="GPLv2+" \
+        name="vector" \
+        com.redhat.component="logging-wvector-container" \
+        io.openshift.maintainer.product="OpenShift Container Platform" \
+        io.openshift.build.commit.id=${CI_VECTOR_UPSTREAM_COMMIT} \
+        io.openshift.build.source-location=${CI_VECTOR_UPSTREAM_URL} \ 
+        io.openshift.build.commit.url=${CI_VECTOR_UPSTREAM_URL}/commit/${CI_VECTOR_UPSTREAM_COMMIT} \
+        version=v0.14.1
