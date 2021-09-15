@@ -11,5 +11,6 @@ bench_output.txt
 sample.log
 scripts/package-lock.json
 target
+!vendor/platforms/src/target/
 node_modules
 tests/data/wasm/*/target
