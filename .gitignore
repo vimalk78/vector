@@ -1,4 +1,5 @@
 *.iml
+!vendor/async-object-pool/*.iml
 *.tmp
 **/*.rs.bk
 .DS_Store
