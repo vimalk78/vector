@@ -41,6 +41,8 @@ fn bundled_protoc() -> Option<PathBuf> {
     let protoc_bin_name = match (env::consts::OS, env::consts::ARCH) {
         ("linux", "x86") => "protoc-linux-x86_32",
         ("linux", "x86_64") => "protoc-linux-x86_64",
+        ("linux", "s390x") => "protoc-linux-s390x",
+        ("linux", "powerpc64le") => "protoc-linux-ppcle_64",
         ("linux", "aarch64") => "protoc-linux-aarch_64",
         ("macos", "x86_64") => "protoc-osx-x86_64",
         ("macos", "aarch64") => "protoc-osx-x86_64", // will be translated to aarch64 by Rosetta
