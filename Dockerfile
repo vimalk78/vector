@@ -1,4 +1,4 @@
-FROM registry.redhat.io/ubi8:8.4-209 AS builder
+FROM registry.redhat.io/ubi8:8.4-211 AS builder
 
 RUN INSTALL_PKGS=" \
       rust-toolset \
@@ -25,7 +25,7 @@ COPY . /src
 RUN make build
 
 
-FROM registry.redhat.io/ubi8:8.4-209
+FROM registry.redhat.io/ubi8:8.4-211
 
 COPY --from=builder /src/target/release/vector /usr/bin
 WORKDIR /usr/bin
