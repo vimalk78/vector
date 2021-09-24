@@ -24,9 +24,13 @@ COPY . /src
 
 RUN make build
 
+# Copying to /usr/bin because copying from /src/target/release/vector to next stage doesnt seem to work in OSBS with imagebuilder
+RUN cp /src/target/release/vector /usr/bin
+
 
 FROM registry.redhat.io/ubi8:8.4-211
 
-COPY --from=builder /src/target/release/vector /usr/bin
+COPY --from=builder /usr/bin/vector /usr/bin/
+
 WORKDIR /usr/bin
 CMD ["/usr/bin/vector"]
