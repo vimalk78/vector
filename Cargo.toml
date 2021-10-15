@@ -297,8 +297,30 @@ lookup = { path = "lib/lookup", features = ["arbitrary"] }
 [patch.crates-io]
 # A patch for lib/vector-core/buffers, addresses Issue 7514
 leveldb-sys = { git = "https://github.com/timberio/leveldb-sys.git", branch = "leveldb_mmap_limit" }
+prost-build = { path = "lib/prost-build" }
 
 [features]
+ocp-logging = [
+  "sources-file",
+  "sources-journald",
+  "sources-kubernetes-logs",
+  "sources-prometheus",
+
+  "transforms-remove_fields",
+  "transforms-rename_fields",
+  "transforms-route",
+  "transforms-concat",
+  "transforms-dedupe",
+  "transforms-field_filter",
+  "transforms-filter",
+
+  "sinks-aws_cloudwatch_logs",
+  "sinks-elasticsearch",
+  "sinks-file",
+  "sinks-kafka",
+  "sinks-loki"
+]
+
 # Default features for *-unknown-linux-gnu and *-apple-darwin
 default = ["api", "api-client", "disk-buffer", "rdkafka-plain", "sinks", "sources", "transforms", "unix", "vendor-all", "vrl-cli"]
 # Default features for *-unknown-linux-* which make use of `cmake` for dependencies
