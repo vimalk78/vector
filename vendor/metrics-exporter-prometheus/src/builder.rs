@@ -1,0 +1,579 @@
+use std::collections::HashMap;
+#[cfg(feature = "tokio-exporter")]
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+#[cfg(feature = "tokio-exporter")]
+use std::thread;
+use std::time::Duration;
+
+#[cfg(feature = "tokio-exporter")]
+use hyper::{
+    server::{conn::AddrStream, Server},
+    service::{make_service_fn, service_fn},
+    StatusCode, {Body, Error as HyperError, Response},
+};
+use metrics::Key;
+use parking_lot::RwLock;
+use quanta::Clock;
+#[cfg(feature = "tokio-exporter")]
+use tokio::{pin, runtime, select};
+
+use metrics_util::{parse_quantiles, Handle, MetricKindMask, Quantile, Recency, Registry, Tracked};
+
+#[cfg(feature = "tokio-exporter")]
+use crate::common::InstallError;
+use crate::common::Matcher;
+use crate::distribution::DistributionBuilder;
+use crate::recorder::{Inner, PrometheusRecorder};
+use std::pin::Pin;
+
+#[cfg(feature = "push-gateway")]
+#[derive(Clone)]
+pub struct PrometheusPushGatewayConfig {
+    address: String,
+    push_interval: std::time::Duration,
+}
+
+/// Builder for creating and installing a Prometheus recorder/exporter.
+pub struct PrometheusBuilder {
+    listen_address: Option<SocketAddr>,
+    #[cfg(feature = "push-gateway")]
+    push_gateway_config: Option<PrometheusPushGatewayConfig>,
+    #[cfg(feature = "tokio-exporter")]
+    allow_ips: Option<Vec<ipnet::IpNet>>,
+    quantiles: Vec<Quantile>,
+    buckets: Option<Vec<f64>>,
+    bucket_overrides: Option<HashMap<Matcher, Vec<f64>>>,
+    idle_timeout: Option<Duration>,
+    recency_mask: MetricKindMask,
+    global_labels: Option<HashMap<String, String>>,
+}
+
+impl PrometheusBuilder {
+    /// Creates a new [`PrometheusBuilder`].
+    pub fn new() -> Self {
+        let quantiles = parse_quantiles(&[0.0, 0.5, 0.9, 0.95, 0.99, 0.999, 1.0]);
+
+        Self {
+            listen_address: Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 9000)),
+            #[cfg(feature = "tokio-exporter")]
+            allow_ips: None,
+            quantiles,
+            buckets: None,
+            bucket_overrides: None,
+            idle_timeout: None,
+            recency_mask: MetricKindMask::NONE,
+            global_labels: None,
+            #[cfg(feature = "push-gateway")]
+            push_gateway_config: None,
+        }
+    }
+
+    /// Sets the listen address for the Prometheus scrape endpoint.
+    ///
+    /// The HTTP listener that is spawned will respond to GET requests on any request path.
+    ///
+    /// Defaults to `0.0.0.0:9000`.
+    pub fn listen_address(mut self, addr: impl Into<SocketAddr>) -> Self {
+        self.listen_address = Some(addr.into());
+        self
+    }
+
+    /// Disable the HTTP listener. This is useful when you only want to use the
+    /// Prometheus push gateway.
+    pub fn disable_http_listener(mut self) -> Self {
+        self.listen_address = None;
+        self
+    }
+
+    /// Sets the push gateway address and push interval for the Prometheus push gateway.
+    #[cfg(feature = "push-gateway")]
+    pub fn push_gateway_config<T>(mut self, addr: T, interval: std::time::Duration) -> Self
+    where
+        T: AsRef<str>,
+    {
+        self.push_gateway_config = Some(PrometheusPushGatewayConfig {
+            address: addr.as_ref().to_string(),
+            push_interval: interval,
+        });
+        self
+    }
+
+    /// Adds an IP address or subnet that is allowed to connect to the Prometheus scrape endpoint.
+    ///
+    /// By default (if this method is never called), no restrictions are enforced.
+    ///
+    /// Note that this on its own is insufficient for access control, if the exporter is running in
+    /// an environment alongside applications (such as web browsers) that are susceptible to
+    /// [DNS rebinding attacks](https://en.wikipedia.org/wiki/DNS_rebinding).
+    #[cfg(feature = "tokio-exporter")]
+    pub fn add_allowed(mut self, subnet: ipnet::IpNet) -> Self {
+        self.allow_ips.get_or_insert(vec![]).push(subnet);
+        self
+    }
+
+    /// Sets the quantiles to use when rendering histograms.
+    ///
+    /// Quantiles represent a scale of 0 to 1, where percentiles represent a scale of 1 to 100, so
+    /// a quantile of 0.99 is the 99th percentile, and a quantile of 0.99 is the 99.9th percentile.
+    ///
+    /// By default, the quantiles will be set to: 0.0, 0.5, 0.9, 0.95, 0.99, 0.999, and 1.0. This means
+    /// that all histograms will be exposed as Prometheus summaries.
+    ///
+    /// If buckets are set (via [`set_buckets`][Self::set_buckets] or
+    /// [`set_buckets_for_metric`][Self::set_buckets_for_metric]) then all histograms will be exposed
+    /// as summaries instead.
+    pub fn set_quantiles(mut self, quantiles: &[f64]) -> Self {
+        self.quantiles = parse_quantiles(quantiles);
+        self
+    }
+
+    /// Sets the buckets to use when rendering histograms.
+    ///
+    /// Buckets values represent the higher bound of each buckets.  If buckets are set, then all
+    /// histograms will be rendered as true Prometheus histograms, instead of summaries.
+    pub fn set_buckets(mut self, values: &[f64]) -> Self {
+        self.buckets = Some(values.to_vec());
+        self
+    }
+
+    /// Sets the bucket for a specific pattern.
+    ///
+    /// The match pattern can be a full match (equality), prefix match, or suffix match.  The
+    /// matchers are applied in that order if two or more matchers would apply to a single metric.
+    /// That is to say, if a full match and a prefix match applied to a metric, the full match would
+    /// win, and if a prefix match and a suffix match applied to a metric, the prefix match would win.
+    ///
+    /// Buckets values represent the higher bound of each buckets.  If buckets are set, then any
+    /// histograms that match will be rendered as true Prometheus histograms, instead of summaries.
+    ///
+    /// This option changes the observer's output of histogram-type metric into summaries.
+    /// It only affects matching metrics if set_buckets was not used.
+    pub fn set_buckets_for_metric(mut self, matcher: Matcher, values: &[f64]) -> Self {
+        let buckets = self.bucket_overrides.get_or_insert_with(HashMap::new);
+        buckets.insert(matcher.sanitized(), values.to_vec());
+        self
+    }
+
+    /// Sets the idle timeout for metrics.
+    ///
+    /// If a metric hasn't been updated within this timeout, it will be removed from the registry
+    /// and in turn removed from the normal scrape output until the metric is emitted again.  This
+    /// behavior is driven by requests to generate rendered output, and so metrics will not be
+    /// removed unless a request has been made recently enough to prune the idle metrics.
+    ///
+    /// Further, the metric kind "mask" configures which metrics will be considered by the idle
+    /// timeout.  If the kind of a metric being considered for idle timeout is not of a kind
+    /// represented by the mask, it will not be affected, even if it would have othered been removed
+    /// for exceeding the idle timeout.
+    ///
+    /// Refer to the documentation for [`MetricKindMask`](metrics_util::MetricKindMask) for more
+    /// information on defining a metric kind mask.
+    pub fn idle_timeout(mut self, mask: MetricKindMask, timeout: Option<Duration>) -> Self {
+        self.idle_timeout = timeout;
+        self.recency_mask = if self.idle_timeout.is_none() {
+            MetricKindMask::NONE
+        } else {
+            mask
+        };
+        self
+    }
+
+    /// Adds a global label to this exporter.
+    ///
+    /// Global labels are applied to all metrics.  Labels defined on the metric key itself have precedence
+    /// over any global labels.  If this method is called multiple times, the latest value for a given label
+    /// key will be used.
+    pub fn add_global_label<K, V>(mut self, key: K, value: V) -> Self
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let labels = self.global_labels.get_or_insert_with(HashMap::new);
+        labels.insert(key.into(), value.into());
+        self
+    }
+
+    /// Builds the recorder and exporter and installs them globally.
+    ///
+    /// When called from within a Tokio runtime, the handler future is spawned directly
+    /// into the runtime.  Otherwise, a new single-threaded Tokio runtime is created
+    /// on a background thread, and the handler is spawned there.
+    ///
+    /// An error will be returned if there's an issue with creating the HTTP server or with
+    /// installing the recorder as the global recorder.
+    #[cfg(feature = "tokio-exporter")]
+    pub fn install(self) -> Result<(), InstallError> {
+        if let Ok(handle) = runtime::Handle::try_current() {
+            let (recorder, exporter) = {
+                let _g = handle.enter();
+                self.build_with_exporter()?
+            };
+            metrics::set_boxed_recorder(Box::new(recorder))?;
+
+            handle.spawn(async move {
+                pin!(exporter);
+                loop {
+                    select! {
+                        _ = &mut exporter => {}
+                    }
+                }
+            });
+
+            return Ok(());
+        }
+
+        let runtime = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let (recorder, exporter) = {
+            let _g = runtime.enter();
+            self.build_with_exporter()?
+        };
+        metrics::set_boxed_recorder(Box::new(recorder))?;
+
+        thread::Builder::new()
+            .name("metrics-exporter-prometheus-http".to_string())
+            .spawn(move || {
+                runtime.block_on(async move {
+                    pin!(exporter);
+                    loop {
+                        select! {
+                            _ = &mut exporter => {}
+                        }
+                    }
+                });
+            })?;
+
+        Ok(())
+    }
+
+    /// Builds the recorder and returns it.
+    pub fn build(self) -> PrometheusRecorder {
+        self.build_with_clock(Clock::new())
+    }
+
+    pub(crate) fn build_with_clock(self, clock: Clock) -> PrometheusRecorder {
+        let inner = Inner {
+            registry: Registry::<Key, Handle, Tracked<Handle>>::tracked(),
+            recency: Recency::new(clock, self.recency_mask, self.idle_timeout),
+            distributions: RwLock::new(HashMap::new()),
+            distribution_builder: DistributionBuilder::new(
+                self.quantiles,
+                self.buckets,
+                self.bucket_overrides,
+            ),
+            descriptions: RwLock::new(HashMap::new()),
+            global_labels: self.global_labels.unwrap_or(HashMap::new()),
+        };
+
+        PrometheusRecorder::from(inner)
+    }
+
+    /// Builds the recorder and exporter and returns them both.
+    ///
+    /// In most cases, users should prefer to use [`PrometheusBuilder::install`] to create and
+    /// install the recorder and exporter automatically for them.  If a caller is combining
+    /// recorders, or needs to schedule the exporter to run in a particular way, this method
+    /// provides the flexibility to do so.
+    #[cfg(feature = "tokio-exporter")]
+    pub fn build_with_exporter(
+        mut self,
+    ) -> Result<
+        (
+            PrometheusRecorder,
+            Pin<Box<dyn Future<Output = Result<(), HyperError>> + Send + 'static>>,
+        ),
+        InstallError,
+    > {
+        let address = self.listen_address;
+        let allow_ips = self.allow_ips.take();
+        #[cfg(feature = "push-gateway")]
+        let push_gateway_config = self.push_gateway_config.clone();
+        let recorder = self.build();
+        let handle = recorder.handle();
+
+        if let Some(address) = &address {
+            let server = Server::try_bind(&address)?;
+            let exporter = async move {
+                let make_svc = make_service_fn(move |socket: &AddrStream| {
+                    let remote_addr = socket.remote_addr().ip();
+                    let allowed = allow_ips
+                        .as_ref()
+                        .map(|subnets| subnets.iter().any(|subnet| subnet.contains(&remote_addr)))
+                        // If no subnets specified, allow all IPs.
+                        .unwrap_or(true);
+
+                    let handle = handle.clone();
+
+                    async move {
+                        Ok::<_, HyperError>(service_fn(move |_| {
+                            let handle = handle.clone();
+
+                            async move {
+                                if allowed {
+                                    let output = handle.render();
+                                    Ok::<_, HyperError>(Response::new(Body::from(output)))
+                                } else {
+                                    Ok::<_, HyperError>(
+                                        Response::builder()
+                                            .status(StatusCode::FORBIDDEN)
+                                            .body(Body::empty())
+                                            .expect("static response is valid"),
+                                    )
+                                }
+                            }
+                        }))
+                    }
+                });
+                server.serve(make_svc).await
+            };
+            return Ok((recorder, Box::pin(exporter)));
+        }
+
+        #[cfg(feature = "push-gateway")]
+        if let Some(push_gateway_config) = &push_gateway_config {
+            let push_interval = push_gateway_config.push_interval;
+            let push_address = push_gateway_config.address.to_string();
+            let exporter = async move {
+                let client = reqwest::Client::default();
+                loop {
+                    tokio::time::sleep(push_interval).await;
+                    let output = handle.render();
+                    let response = client.put(push_address.as_str()).body(output).send().await;
+                    match response {
+                        Ok(response) => {
+                            if let Err(e) = response.error_for_status() {
+                                tracing::error!(
+                                    "error status code for pushing metrics to push gateway: {:?}",
+                                    e
+                                )
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("error pushing metrics to push gateway: {:?}", e)
+                        }
+                    }
+                }
+            };
+            return Ok((recorder, Box::pin(exporter)));
+        }
+
+        unimplemented!("must specify at least one of listen_address or push_gateway_config");
+    }
+}
+
+impl Default for PrometheusBuilder {
+    fn default() -> Self {
+        PrometheusBuilder::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use quanta::Clock;
+
+    use metrics::{GaugeValue, Key, Label, Recorder};
+    use metrics_util::MetricKindMask;
+
+    use super::{Matcher, PrometheusBuilder};
+
+    #[test]
+    fn test_render() {
+        let recorder = PrometheusBuilder::new().build();
+
+        let key = Key::from_name("basic_counter");
+        recorder.increment_counter(&key, 42);
+
+        let handle = recorder.handle();
+        let rendered = handle.render();
+        let expected_counter = "# TYPE basic_counter counter\nbasic_counter 42\n\n";
+
+        assert_eq!(rendered, expected_counter);
+
+        let labels = vec![Label::new("wutang", "forever")];
+        let key = Key::from_parts("basic_gauge", labels);
+        recorder.update_gauge(&key, GaugeValue::Absolute(-3.14));
+        let rendered = handle.render();
+        let expected_gauge = format!(
+            "{}# TYPE basic_gauge gauge\nbasic_gauge{{wutang=\"forever\"}} -3.14\n\n",
+            expected_counter
+        );
+
+        assert_eq!(rendered, expected_gauge);
+
+        let key = Key::from_name("basic_histogram");
+        recorder.record_histogram(&key, 12.0);
+        let rendered = handle.render();
+
+        let histogram_data = concat!(
+            "# TYPE basic_histogram summary\n",
+            "basic_histogram{quantile=\"0\"} 12\n",
+            "basic_histogram{quantile=\"0.5\"} 12\n",
+            "basic_histogram{quantile=\"0.9\"} 12\n",
+            "basic_histogram{quantile=\"0.95\"} 12\n",
+            "basic_histogram{quantile=\"0.99\"} 12\n",
+            "basic_histogram{quantile=\"0.999\"} 12\n",
+            "basic_histogram{quantile=\"1\"} 12\n",
+            "basic_histogram_sum 12\n",
+            "basic_histogram_count 1\n",
+            "\n"
+        );
+        let expected_histogram = format!("{}{}", expected_gauge, histogram_data);
+
+        assert_eq!(rendered, expected_histogram);
+    }
+
+    #[test]
+    fn test_buckets() {
+        const DEFAULT_VALUES: [f64; 3] = [10.0, 100.0, 1000.0];
+        const PREFIX_VALUES: [f64; 3] = [15.0, 105.0, 1005.0];
+        const SUFFIX_VALUES: [f64; 3] = [20.0, 110.0, 1010.0];
+        const FULL_VALUES: [f64; 3] = [25.0, 115.0, 1015.0];
+
+        let recorder = PrometheusBuilder::new()
+            .set_buckets_for_metric(
+                Matcher::Full("metrics.testing foo".to_owned()),
+                &FULL_VALUES[..],
+            )
+            .set_buckets_for_metric(
+                Matcher::Prefix("metrics.testing".to_owned()),
+                &PREFIX_VALUES[..],
+            )
+            .set_buckets_for_metric(Matcher::Suffix("foo".to_owned()), &SUFFIX_VALUES[..])
+            .set_buckets(&DEFAULT_VALUES[..])
+            .build();
+
+        let full_key = Key::from_name("metrics.testing_foo");
+        recorder.record_histogram(&full_key, FULL_VALUES[0]);
+
+        let prefix_key = Key::from_name("metrics.testing_bar");
+        recorder.record_histogram(&prefix_key, PREFIX_VALUES[1]);
+
+        let suffix_key = Key::from_name("metrics_testin_foo");
+        recorder.record_histogram(&suffix_key, SUFFIX_VALUES[2]);
+
+        let default_key = Key::from_name("metrics.wee");
+        recorder.record_histogram(&default_key, DEFAULT_VALUES[2] + 1.0);
+
+        let full_data = concat!(
+            "# TYPE metrics_testing_foo histogram\n",
+            "metrics_testing_foo_bucket{le=\"25\"} 1\n",
+            "metrics_testing_foo_bucket{le=\"115\"} 1\n",
+            "metrics_testing_foo_bucket{le=\"1015\"} 1\n",
+            "metrics_testing_foo_bucket{le=\"+Inf\"} 1\n",
+            "metrics_testing_foo_sum 25\n",
+            "metrics_testing_foo_count 1\n",
+        );
+
+        let prefix_data = concat!(
+            "# TYPE metrics_testing_bar histogram\n",
+            "metrics_testing_bar_bucket{le=\"15\"} 0\n",
+            "metrics_testing_bar_bucket{le=\"105\"} 1\n",
+            "metrics_testing_bar_bucket{le=\"1005\"} 1\n",
+            "metrics_testing_bar_bucket{le=\"+Inf\"} 1\n",
+            "metrics_testing_bar_sum 105\n",
+            "metrics_testing_bar_count 1\n",
+        );
+
+        let suffix_data = concat!(
+            "# TYPE metrics_testin_foo histogram\n",
+            "metrics_testin_foo_bucket{le=\"20\"} 0\n",
+            "metrics_testin_foo_bucket{le=\"110\"} 0\n",
+            "metrics_testin_foo_bucket{le=\"1010\"} 1\n",
+            "metrics_testin_foo_bucket{le=\"+Inf\"} 1\n",
+            "metrics_testin_foo_sum 1010\n",
+            "metrics_testin_foo_count 1\n",
+        );
+
+        let default_data = concat!(
+            "# TYPE metrics_wee histogram\n",
+            "metrics_wee_bucket{le=\"10\"} 0\n",
+            "metrics_wee_bucket{le=\"100\"} 0\n",
+            "metrics_wee_bucket{le=\"1000\"} 0\n",
+            "metrics_wee_bucket{le=\"+Inf\"} 1\n",
+            "metrics_wee_sum 1001\n",
+            "metrics_wee_count 1\n",
+        );
+
+        let handle = recorder.handle();
+        let rendered = handle.render();
+
+        assert!(rendered.contains(full_data));
+        assert!(rendered.contains(prefix_data));
+        assert!(rendered.contains(suffix_data));
+        assert!(rendered.contains(default_data));
+    }
+
+    #[test]
+    fn test_idle_timeout() {
+        let (clock, mock) = Clock::mock();
+
+        let recorder = PrometheusBuilder::new()
+            .idle_timeout(MetricKindMask::COUNTER, Some(Duration::from_secs(10)))
+            .build_with_clock(clock);
+
+        let key = Key::from_name("basic_counter");
+        recorder.increment_counter(&key, 42);
+
+        let key = Key::from_name("basic_gauge");
+        recorder.update_gauge(&key, GaugeValue::Absolute(-3.14));
+
+        let handle = recorder.handle();
+        let rendered = handle.render();
+        let expected = concat!(
+            "# TYPE basic_counter counter\n",
+            "basic_counter 42\n\n",
+            "# TYPE basic_gauge gauge\n",
+            "basic_gauge -3.14\n\n",
+        );
+
+        assert_eq!(rendered, expected);
+
+        mock.increment(Duration::from_secs(9));
+        let rendered = handle.render();
+        assert_eq!(rendered, expected);
+
+        mock.increment(Duration::from_secs(2));
+        let rendered = handle.render();
+
+        let expected = "# TYPE basic_gauge gauge\nbasic_gauge -3.14\n\n";
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    pub fn test_global_labels() {
+        let recorder = PrometheusBuilder::new()
+            .add_global_label("foo", "foo")
+            .add_global_label("foo", "bar")
+            .build();
+        let key = Key::from_name("basic_counter");
+        recorder.increment_counter(&key, 42);
+
+        let handle = recorder.handle();
+        let rendered = handle.render();
+        let expected_counter = "# TYPE basic_counter counter\nbasic_counter{foo=\"bar\"} 42\n\n";
+
+        assert_eq!(rendered, expected_counter);
+    }
+
+    #[test]
+    pub fn test_global_labels_overrides() {
+        let recorder = PrometheusBuilder::new()
+            .add_global_label("foo", "foo")
+            .build();
+
+        let key =
+            Key::from_name("overridden").with_extra_labels(vec![Label::new("foo", "overridden")]);
+        recorder.increment_counter(&key, 1);
+
+        let handle = recorder.handle();
+        let rendered = handle.render();
+        let expected_counter = "# TYPE overridden counter\noverridden{foo=\"overridden\"} 1\n\n";
+
+        assert_eq!(rendered, expected_counter);
+    }
+}
