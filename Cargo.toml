@@ -298,7 +298,7 @@ prost-build = { version = "0.8", optional = true }
 tonic-build = { version = "0.5", default-features = false, features = ["transport", "prost"], optional = true }
 
 [dev-dependencies]
-approx = "0.5.0"
+approx = "0.5.1"
 assert_cmd = "2.0.1"
 base64 = "0.13.0"
 criterion = { version = "0.3.5", features = ["html_reports", "async_tokio"] }
