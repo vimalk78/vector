@@ -305,6 +305,7 @@ ocp-logging = [
   "sources-journald",
   "sources-kubernetes-logs",
   "sources-prometheus",
+  "sources-internal_metrics",
 
   "transforms-remove_fields",
   "transforms-rename_fields",
@@ -313,12 +314,15 @@ ocp-logging = [
   "transforms-dedupe",
   "transforms-field_filter",
   "transforms-filter",
+  "transforms-remap",
+  "transforms-lua",
 
   "sinks-aws_cloudwatch_logs",
   "sinks-elasticsearch",
   "sinks-file",
   "sinks-kafka",
-  "sinks-loki"
+  "sinks-loki",
+  "sinks-prometheus"
 ]
 
 # Default features for *-unknown-linux-gnu and *-apple-darwin
