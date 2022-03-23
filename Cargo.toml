@@ -317,6 +317,8 @@ ocp-logging = [
   "transforms-remap",
   "transforms-lua",
 
+  "vrl-cli",
+
   "sinks-aws_cloudwatch_logs",
   "sinks-elasticsearch",
   "sinks-file",
