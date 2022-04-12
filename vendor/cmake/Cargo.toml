@@ -11,7 +11,7 @@
 
 [package]
 name = "cmake"
-version = "0.1.46"
+version = "0.1.48"
 authors = ["Alex Crichton <alex@alexcrichton.com>"]
 description = "A build dependency for running `cmake` to build a native library\n"
 homepage = "https://github.com/alexcrichton/cmake-rs"
@@ -22,4 +22,4 @@ categories = ["development-tools::build-utils"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/alexcrichton/cmake-rs"
 [dependencies.cc]
-version = "1.0.41"
+version = "1.0.72"
