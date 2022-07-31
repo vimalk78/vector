@@ -364,7 +364,8 @@ ocp-logging = [
   "sinks-kafka",
   "sinks-loki",
   "sinks-console",
-  "sinks-prometheus"
+  "sinks-prometheus",
+  "sinks-gcp"
 ]
 # Default features for *-unknown-linux-gnu and *-apple-darwin
 default = ["api", "api-client", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka/gssapi-vendored", "vrl-cli", "enterprise"]
@@ -679,7 +680,7 @@ sinks-datadog_metrics = ["protobuf-build", "sinks-azure_blob"]
 sinks-datadog_traces = ["protobuf-build"]
 sinks-elasticsearch = ["aws-core", "aws-sigv4", "transforms-metric_to_log"]
 sinks-file = ["async-compression"]
-sinks-gcp = ["base64", "goauth", "gouth", "smpl_jwt"]
+sinks-gcp = ["base64", "goauth", "smpl_jwt"]
 sinks-honeycomb = []
 sinks-http = ["codecs"]
 sinks-humio = ["sinks-splunk_hec", "transforms-metric_to_log"]
