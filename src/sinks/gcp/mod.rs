@@ -24,10 +24,7 @@ use crate::{
     },
 };
 
-pub mod cloud_storage;
-pub mod pubsub;
 pub mod stackdriver_logs;
-pub mod stackdriver_metrics;
 
 const SERVICE_ACCOUNT_TOKEN_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
