@@ -1,4 +1,4 @@
-FROM registry.redhat.io/ubi8:6-754 as builder
+FROM registry.redhat.io/ubi8:8.6-754 as builder
 
 RUN INSTALL_PKGS=" \
       cmake \
@@ -12,6 +12,7 @@ RUN INSTALL_PKGS=" \
       llvm \
       cyrus-sasl-devel \
       libtool \
+      gcc-c++ \
       " && \
     yum install -y $INSTALL_PKGS && \
     rpm -V $INSTALL_PKGS && \
