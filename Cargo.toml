@@ -347,6 +347,7 @@ ocp-logging = [
   "sources-internal_metrics",
   "sources-demo_logs",
   "sources-http",
+  "sources-stdin",
 
   "transforms-remove_fields",
   "transforms-rename_fields",
@@ -361,6 +362,10 @@ ocp-logging = [
 
   "vrl-cli",
 
+  "api",
+  "api-client",
+
+  "sinks-blackhole",
   "sinks-aws_cloudwatch_logs",
   "sinks-elasticsearch",
   "sinks-file",
