@@ -68,6 +68,8 @@ pub struct TlsOptions {
     #[serde(alias = "key_path")]
     pub key_file: Option<PathBuf>,
     pub key_pass: Option<String>,
+    pub min_tls_version: Option<String>,
+    pub ciphersuites: Option<String>,
 }
 
 impl TlsOptions {
@@ -89,6 +91,8 @@ pub struct TlsSettings {
     pub(super) verify_hostname: bool,
     authorities: Vec<X509>,
     pub(super) identity: Option<IdentityStore>, // openssl::pkcs12::ParsedPkcs12 doesn't impl Clone yet
+    pub min_tls_version: Option<String>,
+    pub ciphersuites: Option<String>,
 }
 
 #[derive(Clone)]
@@ -125,6 +129,8 @@ impl TlsSettings {
             verify_hostname: options.verify_hostname.unwrap_or(!for_server),
             authorities: options.load_authorities()?,
             identity: options.load_identity()?,
+            min_tls_version: options.min_tls_version.clone(),
+            ciphersuites: options.ciphersuites.clone(),
         })
     }
 

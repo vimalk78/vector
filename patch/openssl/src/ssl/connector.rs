@@ -6,7 +6,7 @@ use crate::dh::Dh;
 use crate::error::ErrorStack;
 use crate::ssl::{
     HandshakeError, Ssl, SslContext, SslContextBuilder, SslContextRef, SslMethod, SslMode,
-    SslOptions, SslRef, SslStream, SslVerifyMode,
+    SslOptions, SslRef, SslStream, SslVerifyMode, SslVersion,
 };
 use crate::version;
 
@@ -217,6 +217,28 @@ impl DerefMut for ConnectConfiguration {
 pub struct SslAcceptor(SslContext);
 
 impl SslAcceptor {
+    pub fn custom(method: SslMethod, min_tls_version: &String, ciphersuites: &String) -> Result<SslAcceptorBuilder, ErrorStack> {
+        let mut ctx = ctx(method)?;
+        let min_proto_version: SslVersion;
+        match min_tls_version.as_str() {
+            "VersionTLS10" => min_proto_version = SslVersion::TLS1,
+            "VersionTLS11" => min_proto_version = SslVersion::TLS1_1,
+            "VersionTLS12" => min_proto_version = SslVersion::TLS1_2,
+            "VersionTLS13" => min_proto_version = SslVersion::TLS1_3,
+            _ => min_proto_version = SslVersion::TLS1,
+        }
+        ctx.set_min_proto_version(Some(min_proto_version))?;
+        let dh = Dh::params_from_pem(FFDHE_2048.as_bytes())?;
+        ctx.set_tmp_dh(&dh)?;
+        setup_curves(&mut ctx)?;
+        ctx.set_cipher_list(ciphersuites.replace(",", ":").as_str())?;
+        #[cfg(ossl111)]
+        ctx.set_ciphersuites(
+            "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256",
+        )?;
+        Ok(SslAcceptorBuilder(ctx))
+    }
+
     /// Creates a new builder configured to connect to non-legacy clients. This should generally be
     /// considered a reasonable default choice.
     ///

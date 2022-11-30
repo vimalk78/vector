@@ -1,8 +1,9 @@
-FROM registry.redhat.io/ubi8:6-754 as builder
+FROM registry.redhat.io/ubi8:8.6-754 as builder
 
 RUN INSTALL_PKGS=" \
       cmake \
       libarchive \
+      gcc-c++ \
       make \
       git \
       openssl-devel \
