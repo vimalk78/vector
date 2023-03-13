@@ -10,6 +10,8 @@ pub mod aggregate;
 pub mod aws_ec2_metadata;
 #[cfg(feature = "transforms-dedupe")]
 pub mod dedupe;
+#[cfg(feature = "transforms-detect_exceptions")]
+pub mod detect_exceptions;
 #[cfg(feature = "transforms-filter")]
 pub mod filter;
 pub mod log_to_metric;
@@ -88,6 +90,10 @@ pub enum Transforms {
     #[cfg(feature = "transforms-reduce")]
     Reduce(#[configurable(derived)] reduce::ReduceConfig),
 
+    /// Detect Exceptions.
+    #[cfg(feature = "transforms-detect_exceptions")]
+    DetectExceptions(#[configurable(derived)] detect_exceptions::DetectExceptionsConfig),
+
     /// Remap.
     #[cfg(feature = "transforms-remap")]
     Remap(#[configurable(derived)] remap::RemapConfig),
@@ -142,6 +148,8 @@ impl NamedComponent for Transforms {
             Transforms::Remap(config) => config.get_component_name(),
             #[cfg(feature = "transforms-route")]
             Transforms::Route(config) => config.get_component_name(),
+            #[cfg(feature = "transforms-detect_exceptions")]
+            Transforms::DetectExceptions(config) => config.get_component_name(),
             #[cfg(feature = "transforms-sample")]
             Transforms::Sample(config) => config.get_component_name(),
             #[cfg(feature = "transforms-tag_cardinality_limit")]

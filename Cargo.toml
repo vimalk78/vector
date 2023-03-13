@@ -561,6 +561,7 @@ transforms = ["transforms-logs", "transforms-metrics"]
 transforms-logs = [
   "transforms-aws_ec2_metadata",
   "transforms-dedupe",
+  "transforms-detect_exceptions",
   "transforms-filter",
   "transforms-lua",
   "transforms-metric_to_log",
@@ -590,6 +591,7 @@ transforms-lua = ["dep:mlua", "vector-core/lua", "dep:serde_with"]
 transforms-metric_to_log = []
 transforms-pipelines = ["transforms-filter", "transforms-route"]
 transforms-reduce = ["dep:serde_with"]
+transforms-detect_exceptions = ["dep:serde_with"]
 transforms-remap = []
 transforms-route = []
 transforms-sample = []
