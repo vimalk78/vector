@@ -113,6 +113,8 @@ mod pulsar;
 mod redis;
 #[cfg(feature = "transforms-reduce")]
 mod reduce;
+#[cfg(feature = "transforms-detect_exceptions")]
+pub mod detect_exceptions;
 mod remap;
 #[cfg(feature = "transforms-remove_fields")]
 mod remove_fields;

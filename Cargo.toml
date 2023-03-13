@@ -341,6 +341,7 @@ openssl = { path = "patch/openssl" }
 
 [features]
 ocp-logging = [
+  "sources-stdin",
   "sources-file",
   "sources-journald",
   "sources-kubernetes_logs",
@@ -360,6 +361,7 @@ ocp-logging = [
   "transforms-lua",
   "transforms-throttle",
   "transforms-reduce",
+  "transforms-detect_exceptions",
 
   "vrl-cli",
 
@@ -544,6 +546,7 @@ transforms-logs = [
   "transforms-concat",
   "transforms-dedupe",
   "transforms-field_filter",
+  "transforms-detect_exceptions",
   "transforms-filter",
   "transforms-geoip",
   "transforms-grok_parser",
@@ -609,6 +612,7 @@ transforms-remap = ["value"]
 transforms-remove_fields = []
 transforms-remove_tags = []
 transforms-rename_fields = []
+transforms-detect_exceptions = ["serde_with"]
 transforms-route = []
 transforms-sample = ["seahash"]
 transforms-split = []
